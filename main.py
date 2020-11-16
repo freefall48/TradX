@@ -132,22 +132,21 @@ def arima_model(df):
     return df
 
 
-def scale_inputs(df_x):
-    X_scale = MinMaxScaler()
-    df_x_scaled = X_scale.fit_transform(df_x)
-    return df_x_scaled
+def scale_inputs(df):
+    scale = MinMaxScaler()
+    df[df.columns] = scale.fit_transform(df[df.columns])
+    return df
 
 
 def vae_feature_extraction(x, y):
     n_hidden = 40
     n_latent = 12
-    n_layers = 3  # num of dense layers in encoder and decoder respectively
+    n_layers = 3
     n_output = x.shape[1]
     model_prefix = 'vae_gluon_{}d{}l{}h.params'.format(n_latent, n_layers, n_hidden)
-    train_label = y['Close'].copy()
 
     batch_size = 127
-    train_iter = mx.io.NDArrayIter(data={'data': x}, label={'label': train_label}, batch_size=batch_size)
+    train_iter = mx.io.NDArrayIter(data={'data': x}, label={'label': y['Close']}, batch_size=batch_size)
 
     net = VAE(hidden=n_hidden, latent=n_latent, layers=n_layers, output=n_output, batch_size=batch_size)
     net.collect_params().initialize(mx.init.Xavier(), ctx=model_ctx)
@@ -155,7 +154,6 @@ def vae_feature_extraction(x, y):
     trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': .001})
 
     n_epoch = 1
-    start = time.time()
 
     training_loss = []
     for _ in tqdm(range(n_epoch)):
@@ -176,16 +174,11 @@ def vae_feature_extraction(x, y):
         epoch_loss /= n_batch_train
         training_loss.append(epoch_loss)
 
-    end = time.time()
-    print('Time elapsed: {:.2f}s'.format(end - start))
-    print(training_loss)
     net.save_parameters('models/' + model_prefix)
-
     net2 = VAE(hidden=n_hidden, latent=n_latent, layers=n_layers, output=n_output, batch_size=batch_size)
     net2.load_parameters('models/' + model_prefix, ctx=model_ctx)
 
     results = np.empty((0, n_latent), dtype=float)
-
     train_iter.reset()
     for batch in train_iter:
         net2(batch.data[0].as_in_context(model_ctx))
@@ -204,91 +197,12 @@ def main():
     df = lag_difference(df)
     df.dropna(axis=0, how='any', inplace=True)
     df_y = df[['Close']].copy()
-    df_x = df.drop(['Close', 'Adj Close'], axis=1)
-    X_scaled = scale_inputs(df_x)
+    df_X = df.drop(['Close', 'Adj Close'], axis=1)
+    df_X_sc = scale_inputs(df_X)
+    df_y_sc = scale_inputs(df_y)
 
-    vae_feature_extraction(X_scaled, df_y)
-
-    # print(df_x.head())
-    # print(X_scaled)
+    df_X_sc = vae_feature_extraction(df_X_sc, df_y_sc)
 
 
 if __name__ == '__main__':
     main()
-
-#
-# # Stacked auto encoders
-# VAE_data = df
-# num_training_days = 400
-# batch_size = 64
-# n_batches = VAE_data.shape[0] / batch_size
-# VAE_data = VAE_data.values
-#
-# train_iter = mx.io.NDArrayIter(data={'data': VAE_data[:num_training_days, :-1]},
-#                                label={'label': VAE_data[:num_training_days, -1]}, batch_size=batch_size)
-# test_iter = mx.io.NDArrayIter(data={'data': VAE_data[num_training_days:, :-1]},
-#                               label={'label': VAE_data[num_training_days:, -1]}, batch_size=batch_size)
-# #
-# n_hidden = 400  # neurons in each layer
-# n_latent = 2
-# n_layers = 3  # num of dense layers in encoder and decoder respectively
-# n_output = VAE_data.shape[1] - 1
-#
-# net = VAE(n_hidden=n_hidden, n_latent=n_latent, n_layers=n_layers, n_output=n_output, batch_size=batch_size,
-#           act_type='relu')
-# net.collect_params().initialize(mx.init.Xavier(), ctx=mx.gpu())
-# net.hybridize()
-# trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': .01})
-#
-# # print(mx.nd.array(df.iloc[:, -2]))
-#
-# n_epoch = 10
-# training_loss = []
-# validation_loss = []
-# for epoch in range(n_epoch):
-#     epoch_loss = 0
-#     epoch_val_loss = 0
-#
-#     train_iter.reset()
-#     test_iter.reset()
-#
-#     n_batch_train = 0
-#     for batch in train_iter:
-#         n_batch_train += 1
-#         data = batch.data[0].as_in_context(mx.gpu())
-#         print(data)
-#
-#         with autograd.record():
-#             loss = net(data)
-#         loss.backward()
-#         trainer.step(data.shape[0])
-#         epoch_loss += nd.mean(loss).asscalar()
-#
-#     n_batch_val = 0
-#     for batch in test_iter:
-#         n_batch_val += 1
-#         data = batch.data[0].as_in_context(mx.gpu())
-#         loss = net(data)
-#         epoch_val_loss += nd.mean(loss).asscalar()
-#
-#     epoch_loss /= n_batch_train
-#     epoch_val_loss /= n_batch_val
-#
-#     training_loss.append(epoch_loss)
-#     validation_loss.append(epoch_val_loss)
-#
-# print(training_loss)
-# # print(VAE_data)
-#
-# # vae_added_df = mx.nd.array(df.iloc[:, -1])
-# # print(net(df).shape)
-# # print('The shape of the newly created (from the autoencoder) features is {}.'.format(vae_added_df.shape))
-# # # Combined dataset summary
-# # # df.drop('Adj Close', 1, inplace=True)
-# # df.dropna(how='any', axis=0, inplace=True)
-# # # print(df.info())
-# # # print(df.head(20))
-# # # plot_technical_indicators(df, 400)
-# #
-# # print(validation_loss)
-# # print(nd.argmax(net(mx.ndarray.array(VAE_data[:num_training_days, :-1]).as_in_context(mx.gpu())), axis=1))
