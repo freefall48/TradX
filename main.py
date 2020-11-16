@@ -1,3 +1,4 @@
+from sklearn.decomposition import PCA
 from tqdm import tqdm
 
 import time
@@ -20,9 +21,10 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 
+from gan import RNNModel, CyclicalSchedule, TriangularSchedule
 from vae import VAE
 
-model_ctx = mx.gpu()
+model_ctx = mx.gpu(0)
 
 
 def load_dataframe():
@@ -139,8 +141,14 @@ def scale_inputs(df):
 
 
 def vae_feature_extraction(x, y):
-    n_hidden = 40
-    n_latent = 12
+    """
+    
+    :param x:
+    :param y:
+    :return:
+    """
+    n_hidden = 30
+    n_latent = 8
     n_layers = 3
     n_output = x.shape[1]
     model_prefix = 'vae_gluon_{}d{}l{}h.params'.format(n_latent, n_layers, n_hidden)
@@ -151,7 +159,7 @@ def vae_feature_extraction(x, y):
     net = VAE(hidden=n_hidden, latent=n_latent, layers=n_layers, output=n_output, batch_size=batch_size)
     net.collect_params().initialize(mx.init.Xavier(), ctx=model_ctx)
     net.hybridize()
-    trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': .001})
+    trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': .01})
 
     n_epoch = 1
 
@@ -178,12 +186,27 @@ def vae_feature_extraction(x, y):
     net2 = VAE(hidden=n_hidden, latent=n_latent, layers=n_layers, output=n_output, batch_size=batch_size)
     net2.load_parameters('models/' + model_prefix, ctx=model_ctx)
 
-    results = np.empty((0, n_latent), dtype=float)
+    results = np.empty((0, n_hidden), dtype=float)
     train_iter.reset()
     for batch in train_iter:
         net2(batch.data[0].as_in_context(model_ctx))
-        results = np.append(results, net2.mu.asnumpy(), axis=0)
+        results = np.append(results, net2.hlf.asnumpy(), axis=0)
     return pd.DataFrame(results)
+
+
+def eigen_portfolio(df):
+    """
+
+    :param df:
+    :return:
+    """
+    print(df.shape)
+    pca = PCA(n_components=.99, svd_solver='full')
+    x_pca = StandardScaler().fit_transform(df)
+    df_pca = pd.DataFrame(pca.fit_transform(x_pca))
+    df_pca.index = df.index
+    print('99% of the varience is explained by {} auto encoder variables'.format(pca.n_components_))
+    return df_pca
 
 
 def main():
@@ -201,7 +224,18 @@ def main():
     df_X_sc = scale_inputs(df_X)
     df_y_sc = scale_inputs(df_y)
 
-    df_X_sc = vae_feature_extraction(df_X_sc, df_y_sc)
+    df_vae = vae_feature_extraction(df_X_sc, df_y_sc)
+    df_vae.index = df_X_sc.index
+    df_vae = eigen_portfolio(df_vae)
+    print(df_vae)
+
+    # lstm_model = RNNModel(num_embed=df_X_sc.shape[1], num_hidden=500, num_layers=1)
+    # lstm_model.collect_params().initialize(mx.init.Xavier(), ctx=mx.cpu())
+    # trainer = gluon.Trainer(lstm_model.collect_params(), 'adam', {'learning_rate': .01})
+    # loss = gluon.loss.L1Loss()
+    #
+    # schedule = CyclicalSchedule(TriangularSchedule, min_lr=0.5, max_lr=2, cycle_length=500)
+    # iterations = 1500
 
 
 if __name__ == '__main__':
